@@ -38,6 +38,8 @@ use tari_utilities::{
     ByteArray,
 };
 
+use serde::Serialize;
+
 #[macro_export]
 macro_rules! script {
     ($($opcode:ident$(($var:expr))?) +) => {{
@@ -97,6 +99,43 @@ impl TariScript {
         } else {
             Err(ScriptError::NonUnitLengthStack)
         }
+    }
+
+    /// Runs each step and returns a vec of results, one for each step that was executed until it failed. This method
+    /// is not intended to be used for production, but will be helpful in writing debugging tools
+    /// and tests
+    pub fn trace_with_context(
+        &self,
+        inputs: &ExecutionStack,
+        context: &ScriptContext
+    ) -> Result<Vec<(Opcode, ExecutionTraceStep)>, ScriptError> {
+        let mut result = Vec::with_capacity(self.script.len());
+
+        // Copy all inputs onto the stack
+        let mut stack = inputs.clone();
+
+        // Local execution state
+        let mut state = ExecutionState::default();
+
+        for opcode in self.script.iter() {
+            if self.should_execute(opcode, &state)? {
+                match self.execute_opcode(opcode, &mut stack, context, &mut state) {
+                    Ok(_) => result.push((opcode.clone(), ExecutionTraceStep::ExecutedSuccessfully {stack_after_executing: stack.clone()})),
+                    Err(e) => {
+
+                        result.push((opcode.clone(), ExecutionTraceStep::Failed {error: e}));
+                        return Ok(result); // Normal execution would terminate here
+                    }
+
+                }
+
+            } else {
+                result.push((opcode.clone(), ExecutionTraceStep::Skipped));
+                continue;
+            }
+        }
+
+        Ok(result)
     }
 
     fn should_execute(&self, opcode: &Opcode, state: &ExecutionState) -> Result<bool, ScriptError> {
@@ -475,6 +514,13 @@ impl Default for ExecutionState {
             else_count: 0,
         }
     }
+}
+
+#[derive(Serialize)]
+pub enum ExecutionTraceStep {
+    ExecutedSuccessfully{ stack_after_executing: ExecutionStack },
+    Skipped,
+    Failed{ error: ScriptError }
 }
 
 #[cfg(test)]

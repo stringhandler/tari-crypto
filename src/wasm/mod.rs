@@ -24,11 +24,13 @@ use wasm_bindgen::prelude::*;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod keyring;
+mod tari_script;
 
 pub mod commitments;
 pub mod key_utils;
 pub mod range_proofs;
 pub use keyring::KeyRing;
+
 
 #[wasm_bindgen]
 pub fn version() -> String {
