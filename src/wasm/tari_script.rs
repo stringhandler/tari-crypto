@@ -29,12 +29,12 @@ impl TariScript {
 
     }
 
-    pub fn trace(&mut self, op_codes: &[u8], input: &[u8]) -> Result<JsValue, JsValue> {
+    pub fn trace(&mut self, op_codes: &[u8], input: &[u8], block_height: u64) -> Result<JsValue, JsValue> {
         let codes =  script::Opcode::parse(op_codes)?;
         let s = script::TariScript::new(codes);
         let input =  script::ExecutionStack::from_bytes(input) ?;
-        let result =  s.trace_with_context(&input, &ScriptContext::default()) ?;
-
+        let context = ScriptContext::new(block_height, &Default::default(), &Default::default());
+        let result =  s.trace_with_context(&input, &context)?;
 
         let result :Vec<TraceResult> = result.into_iter().map(|(op, res) | TraceResult{ op_code: op.to_string(), step_result: res}).collect();
         Ok(JsValue::from_serde(&result).unwrap())

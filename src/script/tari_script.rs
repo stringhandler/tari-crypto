@@ -140,10 +140,19 @@ impl TariScript {
 
     fn should_execute(&self, opcode: &Opcode, state: &ExecutionState) -> Result<bool, ScriptError> {
         match opcode {
-            &Opcode::Else | &Opcode::EndIf => {
-                // if we're getting Else or EndIf before an IfThen then the script is invalid
+            Opcode::Else => {
+                // if we're getting Else before an IfThen then the script is invalid
                 if state.if_count == 0 {
-                    return Err(ScriptError::InvalidOpcode);
+                    return Err(ScriptError::ElseWithNoMatchingIf);
+                }
+                // if the opcode is Else or EndIf then execute it
+                // Else or EndIf will update the execution state
+                Ok(true)
+            },
+            Opcode::EndIf => {
+                // if we're getting EndIf before an IfThen then the script is invalid
+                if state.if_count == 0 {
+                    return Err(ScriptError::EndIfWithNoMatchingIf);
                 }
                 // if the opcode is Else or EndIf then execute it
                 // Else or EndIf will update the execution state
@@ -366,7 +375,7 @@ impl TariScript {
             state.else_count += 1;
             Ok(())
         } else {
-            Err(ScriptError::InvalidOpcode)
+            Err(ScriptError::ElseWithNoMatchingIf)
         }
     }
 
@@ -383,7 +392,7 @@ impl TariScript {
             }
             Ok(())
         } else {
-            Err(ScriptError::InvalidOpcode)
+            Err(ScriptError::EndIfWithNoMatchingIf)
         }
     }
 
@@ -645,27 +654,27 @@ mod test {
 
         let inputs = inputs!(0);
         let result = script.execute(&inputs);
-        assert_eq!(result.unwrap_err(), ScriptError::InvalidOpcode);
+        assert_eq!(result.unwrap_err(), ScriptError::ElseWithNoMatchingIf);
 
         // unexpected else
         let script = script!(Else);
 
         let inputs = inputs!(0);
         let result = script.execute(&inputs);
-        assert_eq!(result.unwrap_err(), ScriptError::InvalidOpcode);
+        assert_eq!(result.unwrap_err(), ScriptError::ElseWithNoMatchingIf);
 
         // unexpected endif
         let script = script!(EndIf);
 
         let inputs = inputs!(0);
         let result = script.execute(&inputs);
-        assert_eq!(result.unwrap_err(), ScriptError::InvalidOpcode);
+        assert_eq!(result.unwrap_err(), ScriptError::EndIfWithNoMatchingIf);
 
         // duplicate endif
         let script = script!(IfThen PushInt(420) Else PushInt(66) EndIf EndIf);
         let inputs = inputs!(0);
         let result = script.execute(&inputs);
-        assert_eq!(result.unwrap_err(), ScriptError::InvalidOpcode);
+        assert_eq!(result.unwrap_err(), ScriptError::EndIfWithNoMatchingIf);
 
         // no else or endif
         let script = script!(IfThen PushOne IfThen PushOne);

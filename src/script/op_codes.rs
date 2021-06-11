@@ -258,7 +258,7 @@ impl Opcode {
     /// Take a byte slice and read the next opcode from it, including any associated data. `read_next` returns a tuple
     /// of the deserialised opcode, and an updated slice that has the Opcode and data removed.
     fn read_next(bytes: &[u8]) -> Result<(Opcode, &[u8]), ScriptError> {
-        let code = bytes.get(0).ok_or(ScriptError::InvalidOpcode)?;
+        let code = bytes.get(0).ok_or(ScriptError::MissingOpcode)?;
         use Opcode::*;
         match *code {
             OP_CHECK_HEIGHT_VERIFY => {
@@ -347,7 +347,7 @@ impl Opcode {
             OP_IF_THEN => Ok((IfThen, &bytes[1..])),
             OP_ELSE => Ok((Else, &bytes[1..])),
             OP_END_IF => Ok((EndIf, &bytes[1..])),
-            _ => Err(ScriptError::InvalidOpcode),
+            _ => Err(ScriptError::InvalidOpcode(*code)),
         }
     }
 
@@ -475,7 +475,7 @@ mod test {
     fn parse() {
         let script = [0x60u8, 0x71, 0x00];
         let err = Opcode::parse(&script).unwrap_err();
-        assert!(matches!(err, ScriptError::InvalidOpcode));
+        assert!(matches!(err, ScriptError::InvalidOpcode(0x00)));
 
         let script = [0x60u8, 0x71];
         let opcodes = Opcode::parse(&script).unwrap();

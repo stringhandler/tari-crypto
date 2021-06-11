@@ -35,10 +35,14 @@ pub enum ScriptError {
     IncompatibleTypes,
     #[error("A script opcode resulted in a value that exceeded the maximum or minimum value")]
     ValueExceedsBounds,
-    #[error("The script encountered an invalid opcode")]
-    InvalidOpcode,
+    #[error("The script encountered an invalid opcode:{0}")]
+    InvalidOpcode(u8),
     #[error("The script is missing closing opcodes (Else or EndIf)")]
     MissingOpcode,
+    #[error("Encountered an Else opcode with no matching IF")]
+ElseWithNoMatchingIf,
+#[error("Encountered an ENDIF opcode with no matching IF")]
+    EndIfWithNoMatchingIf,
     #[error("The script contained an invalid signature")]
     InvalidSignature,
     #[error("The serialised stack contained invalid input")]
