@@ -137,7 +137,11 @@ impl<'a, 'b> Mul<&'b RistrettoPublicKey> for &'a RistrettoSecretKey {
     type Output = RistrettoPublicKey;
 
     fn mul(self, rhs: &'b RistrettoPublicKey) -> RistrettoPublicKey {
-        let p = &self.0 * &rhs.point;
+        let point = match rhs.point {
+            Some(r) => r.clone(),
+            None => rhs.compressed.decompress().unwrap()
+        };
+        let p = &self.0 * &point;
         RistrettoPublicKey::new_from_pk(p)
     }
 }
@@ -207,7 +211,7 @@ impl From<u64> for RistrettoSecretKey {
 /// ```
 #[derive(Clone)]
 pub struct RistrettoPublicKey {
-    pub(crate) point: RistrettoPoint,
+    pub(crate) point: Option<RistrettoPoint>,
     pub(crate) compressed: CompressedRistretto,
 }
 
@@ -215,15 +219,25 @@ impl RistrettoPublicKey {
     // Private constructor
     pub(super) fn new_from_pk(pk: RistrettoPoint) -> RistrettoPublicKey {
         RistrettoPublicKey {
-            point: pk,
+            point: Some(pk),
             compressed: pk.compress(),
         }
     }
 
     pub(super) fn new_from_compressed(compressed: CompressedRistretto) -> Option<RistrettoPublicKey> {
-        compressed
-            .decompress()
-            .map(|point| RistrettoPublicKey { compressed, point })
+        Some(RistrettoPublicKey {
+            point: None,
+            compressed
+        })
+        // compressed
+        //     .decompress()
+        //     .map(|point| RistrettoPublicKey { compressed, point })
+    }
+
+    pub fn decompress(&mut self) {
+        if self.point.is_none() {
+            self.point = self.compressed.decompress()
+        }
     }
 }
 
@@ -241,7 +255,7 @@ impl PublicKey for RistrettoPublicKey {
     }
 
     fn batch_mul(scalars: &[Self::K], points: &[Self]) -> Self {
-        let p: Vec<&RistrettoPoint> = points.iter().map(|p| &p.point).collect();
+        let p: Vec<RistrettoPoint> = points.iter().map(|p| p.point.unwrap()).collect();
         let s: Vec<&Scalar> = scalars.iter().map(|k| &k.0).collect();
         let p = RistrettoPoint::multiscalar_mul(s, p);
         RistrettoPublicKey::new_from_pk(p)
@@ -359,7 +373,7 @@ impl<'a, 'b> Add<&'b RistrettoPublicKey> for &'a RistrettoPublicKey {
     type Output = RistrettoPublicKey;
 
     fn add(self, rhs: &'b RistrettoPublicKey) -> RistrettoPublicKey {
-        let p_sum = &self.point + &rhs.point;
+        let p_sum = &self.point.unwrap() + &rhs.point.unwrap();
         RistrettoPublicKey::new_from_pk(p_sum)
     }
 }
@@ -368,7 +382,7 @@ impl<'a, 'b> Sub<&'b RistrettoPublicKey> for &'a RistrettoPublicKey {
     type Output = RistrettoPublicKey;
 
     fn sub(self, rhs: &RistrettoPublicKey) -> RistrettoPublicKey {
-        let p_sum = &self.point - &rhs.point;
+        let p_sum = &self.point.unwrap() - &rhs.point.unwrap();
         RistrettoPublicKey::new_from_pk(p_sum)
     }
 }
@@ -377,7 +391,7 @@ impl<'a, 'b> Mul<&'b RistrettoSecretKey> for &'a RistrettoPublicKey {
     type Output = RistrettoPublicKey;
 
     fn mul(self, rhs: &'b RistrettoSecretKey) -> RistrettoPublicKey {
-        let p = &rhs.0 * &self.point;
+        let p = &rhs.0 * &self.point.unwrap();
         RistrettoPublicKey::new_from_pk(p)
     }
 }
@@ -422,13 +436,13 @@ impl From<RistrettoSecretKey> for Scalar {
 
 impl From<RistrettoPublicKey> for RistrettoPoint {
     fn from(pk: RistrettoPublicKey) -> Self {
-        pk.point
+        pk.point.unwrap()
     }
 }
 
 impl From<&RistrettoPublicKey> for RistrettoPoint {
     fn from(pk: &RistrettoPublicKey) -> Self {
-        pk.point
+        pk.point.unwrap()
     }
 }
 
