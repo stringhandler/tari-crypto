@@ -20,8 +20,12 @@
 // WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 // USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use bulletproofs_plus::{generators::pedersen_gens::ExtensionDegree, PedersenGens};
-use curve25519_dalek::{ristretto::RistrettoPoint, traits::Identity};
+use std::iter::once;
+
+use curve25519_dalek::{
+    ristretto::{CompressedRistretto, RistrettoPoint},
+    traits::{Identity, MultiscalarMul},
+};
 
 use crate::{
     commitment::{ExtendedHomomorphicCommitmentFactory, HomomorphicCommitment, HomomorphicCommitmentFactory},
@@ -45,34 +49,41 @@ use crate::{
 /// Notes:
 ///  - Homomorphism with public key only holds for extended commitments with `ExtensionDegree::Zero`
 #[derive(Debug, PartialEq, Clone)]
-pub struct ExtendedPedersenCommitmentFactory(pub(crate) PedersenGens<RistrettoPoint>);
+pub struct ExtendedPedersenCommitmentFactory {
+    pub(crate) h_base: RistrettoPoint,
+    pub(crate) h_base_compressed: CompressedRistretto,
+    pub(crate) g_base_vec: Vec<RistrettoPoint>,
+    pub(crate) g_base_compressed_vec: Vec<CompressedRistretto>,
+    pub(crate) extension_degree: usize,
+}
 
 impl ExtendedPedersenCommitmentFactory {
     /// Create a new Extended Pedersen Ristretto Commitment factory for the required extension degree using
     /// pre-calculated compressed constants - we only hold references to the static generator points.
-    pub fn new_with_extension_degree(extension_degree: ExtensionDegree) -> Result<Self, CommitmentError> {
-        if extension_degree as usize > RISTRETTO_NUMS_POINTS.len() ||
-            extension_degree as usize > RISTRETTO_NUMS_POINTS_COMPRESSED.len()
+    pub fn new_with_extension_degree(extension_degree: usize) -> Result<Self, CommitmentError> {
+        // NOTE: Extra +1 is to skip the H point in RISTRETTO_NUMS, which is the first element
+        if extension_degree + 1 > RISTRETTO_NUMS_POINTS.len() ||
+            extension_degree + 1 > RISTRETTO_NUMS_POINTS_COMPRESSED.len()
         {
             return Err(CommitmentError::ExtensionDegree(
                 "Not enough Ristretto NUMS points to construct the extended commitment factory".to_string(),
             ));
         }
         let g_base_vec = std::iter::once(&RISTRETTO_PEDERSEN_G)
-            .chain(RISTRETTO_NUMS_POINTS[1..extension_degree as usize].iter())
+            .chain(RISTRETTO_NUMS_POINTS.iter().skip(1).take(extension_degree))
             .copied()
             .collect();
         let g_base_compressed_vec = std::iter::once(&RISTRETTO_PEDERSEN_G_COMPRESSED)
-            .chain(RISTRETTO_NUMS_POINTS_COMPRESSED[1..extension_degree as usize].iter())
+            .chain(RISTRETTO_NUMS_POINTS_COMPRESSED.iter().skip(1).take(extension_degree))
             .copied()
             .collect();
-        Ok(Self(PedersenGens {
+        Ok(Self {
             h_base: *RISTRETTO_PEDERSEN_H,
             h_base_compressed: *RISTRETTO_PEDERSEN_H_COMPRESSED,
             g_base_vec,
             g_base_compressed_vec,
             extension_degree,
-        }))
+        })
     }
 }
 
@@ -80,7 +91,7 @@ impl Default for ExtendedPedersenCommitmentFactory {
     /// The default Extended Pedersen Ristretto Commitment factory is of extension degree Zero; this corresponds to
     /// the default non extended Pedersen Ristretto Commitment factory.
     fn default() -> Self {
-        Self::new_with_extension_degree(ExtensionDegree::Zero).expect("Ristretto default base points not defined!")
+        Self::new_with_extension_degree(0).expect("Ristretto default base points not defined!")
     }
 }
 
@@ -88,10 +99,7 @@ impl HomomorphicCommitmentFactory for ExtendedPedersenCommitmentFactory {
     type P = RistrettoPublicKey;
 
     fn commit(&self, k: &RistrettoSecretKey, v: &RistrettoSecretKey) -> PedersenCommitment {
-        let c = self
-            .0
-            .commit(&v.0, &[k.0])
-            .expect("Default commitments will never fail");
+        let c = RistrettoPoint::multiscalar_mul([v, k], [self.h_base, self.g_base_vec[0]]);
         HomomorphicCommitment(RistrettoPublicKey::new_from_pk(c))
     }
 
@@ -123,11 +131,18 @@ impl ExtendedHomomorphicCommitmentFactory for ExtendedPedersenCommitmentFactory 
         k_vec: &[RistrettoSecretKey],
         v: &RistrettoSecretKey,
     ) -> Result<PedersenCommitment, CommitmentError> {
-        let c = self
-            .0
-            .commit(v, k_vec)
-            .map_err(|e| CommitmentError::ExtensionDegree(e.to_string()))?;
-        Ok(HomomorphicCommitment(RistrettoPublicKey::new_from_pk(c)))
+        if k_vec.is_empty() || k_vec.len() > self.extension_degree + 1 {
+            Err(CommitmentError::ExtensionDegree(
+                "k_vec must match the extension_degree".to_string(),
+            ))
+        } else {
+            let scalars = once(v).chain(k_vec);
+            let g_base_head = self.g_base_vec.iter().take(k_vec.len());
+            let points = once(&self.h_base).chain(g_base_head);
+            Ok(HomomorphicCommitment(RistrettoPublicKey::new_from_pk(
+                RistrettoPoint::multiscalar_mul(scalars, points),
+            )))
+        }
     }
 
     fn zero_extended(&self) -> PedersenCommitment {
@@ -173,13 +188,12 @@ mod test {
         hash::{Hash, Hasher},
     };
 
-    use bulletproofs_plus::generators::pedersen_gens::ExtensionDegree;
-    use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar, traits::MultiscalarMul};
+    use curve25519_dalek::ristretto::RistrettoPoint;
     use rand::rngs::ThreadRng;
     use tari_utilities::message_format::MessageFormat;
 
     use crate::{
-        commitment::{ExtendedHomomorphicCommitmentFactory, HomomorphicCommitment, HomomorphicCommitmentFactory},
+        commitment::{ExtendedHomomorphicCommitmentFactory, HomomorphicCommitmentFactory},
         keys::{PublicKey, SecretKey},
         ristretto::{
             constants::RISTRETTO_NUMS_POINTS,
@@ -195,23 +209,14 @@ mod test {
         },
     };
 
-    static EXTENSION_DEGREE: [ExtensionDegree; 6] = [
-        ExtensionDegree::Zero,
-        ExtensionDegree::One,
-        ExtensionDegree::Two,
-        ExtensionDegree::Three,
-        ExtensionDegree::Four,
-        ExtensionDegree::Five,
-    ];
-
     #[test]
     fn check_default_base() {
         let factory = ExtendedPedersenCommitmentFactory::default();
-        assert_eq!(factory.0.g_base_vec[0], RISTRETTO_PEDERSEN_G);
-        assert_eq!(factory.0.h_base, *RISTRETTO_PEDERSEN_H);
+        assert_eq!(factory.g_base_vec[0], RISTRETTO_PEDERSEN_G);
+        assert_eq!(factory.h_base, *RISTRETTO_PEDERSEN_H);
         assert_eq!(
             factory,
-            ExtendedPedersenCommitmentFactory::new_with_extension_degree(ExtensionDegree::Zero).unwrap()
+            ExtendedPedersenCommitmentFactory::new_with_extension_degree(0).unwrap()
         );
     }
 
@@ -220,38 +225,12 @@ mod test {
     #[test]
     fn check_extended_bases_between_factories() {
         let factory_singular = PedersenCommitmentFactory::default();
-        for extension_degree in EXTENSION_DEGREE {
+        for extension_degree in 0..5 {
             let factory_extended =
                 ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
-            assert_eq!(factory_extended.0.extension_degree, extension_degree);
-            assert_eq!(factory_singular.G, factory_extended.0.g_base_vec[0]);
-            assert_eq!(factory_singular.H, factory_extended.0.h_base);
-        }
-    }
-
-    #[test]
-    /// Verify that the identity point is equal to a commitment to zero with a zero blinding factor vector on the base
-    /// points
-    fn check_zero_both_traits() {
-        for extension_degree in EXTENSION_DEGREE {
-            let zero_values = vec![Scalar::zero(); extension_degree as usize + 1];
-            let mut points = Vec::with_capacity(extension_degree as usize + 1);
-            let factory = ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
-            points.push(factory.0.h_base);
-            points.append(&mut factory.0.g_base_vec.clone());
-            let c = RistrettoPoint::multiscalar_mul(&zero_values, &points);
-
-            // HomomorphicCommitmentFactory
-            assert_eq!(
-                HomomorphicCommitment(RistrettoPublicKey::new_from_pk(c)),
-                ExtendedPedersenCommitmentFactory::zero(&factory)
-            );
-
-            // ExtendedHomomorphicCommitmentFactory
-            assert_eq!(
-                HomomorphicCommitment(RistrettoPublicKey::new_from_pk(c)),
-                ExtendedPedersenCommitmentFactory::zero_extended(&factory)
-            );
+            assert_eq!(factory_extended.extension_degree, extension_degree);
+            assert_eq!(factory_singular.G, factory_extended.g_base_vec[0]);
+            assert_eq!(factory_singular.H, factory_extended.h_base);
         }
     }
 
@@ -263,7 +242,7 @@ mod test {
     fn check_open_both_traits() {
         let H = *RISTRETTO_PEDERSEN_H;
         let mut rng = rand::thread_rng();
-        for extension_degree in EXTENSION_DEGREE {
+        for extension_degree in 1..6 {
             let factory = ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
             for _ in 0..25 {
                 let v = RistrettoSecretKey::random(&mut rng);
@@ -286,7 +265,7 @@ mod test {
                 assert!(!factory.open_extended(&not_k, &v, &c_extended).unwrap());
 
                 // HomomorphicCommitmentFactory vs. ExtendedHomomorphicCommitmentFactory
-                if extension_degree == ExtensionDegree::Zero {
+                if extension_degree == 0 {
                     let c = factory.commit(&k_vec[0], &v);
                     assert_eq!(c, c_extended);
                     // - Default open
@@ -309,7 +288,7 @@ mod test {
     #[test]
     fn check_homomorphism_both_traits() {
         let mut rng = rand::thread_rng();
-        for extension_degree in EXTENSION_DEGREE {
+        for extension_degree in 1..6 {
             for _ in 0..25 {
                 let v1 = RistrettoSecretKey::random(&mut rng);
                 let v2 = RistrettoSecretKey::random(&mut rng);
@@ -317,7 +296,7 @@ mod test {
                 let k1_vec = vec![RistrettoSecretKey::random(&mut rng); extension_degree as usize];
                 let k2_vec = vec![RistrettoSecretKey::random(&mut rng); extension_degree as usize];
                 let mut k_sum_i = Vec::with_capacity(extension_degree as usize);
-                for i in 0..extension_degree as usize {
+                for i in 0..extension_degree {
                     k_sum_i.push(&k1_vec[i] + &k2_vec[i]);
                 }
                 let factory = ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
@@ -333,7 +312,7 @@ mod test {
                 assert!(factory.open_extended(&k_sum_i, &v_sum, &c_sum_extended).unwrap());
 
                 // HomomorphicCommitmentFactory vs. ExtendedHomomorphicCommitmentFactory
-                if extension_degree == ExtensionDegree::Zero {
+                if extension_degree == 0 {
                     let c1 = factory.commit(&k1_vec[0], &v1);
                     assert_eq!(c1, c1_extended);
                     let c2 = factory.commit(&k2_vec[0], &v2);
@@ -377,15 +356,14 @@ mod test {
     // Try to create an extended 'RistrettoPublicKey'
     fn random_keypair(
         factory: &ExtendedPedersenCommitmentFactory,
-        extension_degree: ExtensionDegree,
+        extension_degree: usize,
         rng: &mut ThreadRng,
     ) -> (RistrettoSecretKey, RistrettoPublicKey) {
         match extension_degree {
-            ExtensionDegree::Zero => RistrettoPublicKey::random_keypair(rng),
+            0 => RistrettoPublicKey::random_keypair(rng),
             _ => {
-                let k_vec = vec![RistrettoSecretKey::random(rng); extension_degree as usize];
+                let k_vec = vec![RistrettoSecretKey::random(rng); extension_degree + 1];
                 let g_base_vec: Vec<RistrettoPublicKey> = factory
-                    .0
                     .g_base_vec
                     .iter()
                     .map(|g| RistrettoPublicKey::new_from_pk(*g))
@@ -408,15 +386,15 @@ mod test {
     #[test]
     fn check_homomorphism_with_public_key_extended() {
         let mut rng = rand::thread_rng();
-        for extension_degree in EXTENSION_DEGREE {
+        for extension_degree in 0..5 {
             // Left-hand side
             let v1 = RistrettoSecretKey::random(&mut rng);
-            let k1_vec = vec![RistrettoSecretKey::random(&mut rng); extension_degree as usize];
+            let k1_vec = vec![RistrettoSecretKey::random(&mut rng); extension_degree + 1];
             let factory = ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
             let c1 = factory.commit_extended(&k1_vec, &v1).unwrap();
-            let mut k2_vec = Vec::with_capacity(extension_degree as usize);
-            let mut k2_pub_vec = Vec::with_capacity(extension_degree as usize);
-            for _i in 0..extension_degree as usize {
+            let mut k2_vec = Vec::with_capacity(extension_degree + 1);
+            let mut k2_pub_vec = Vec::with_capacity(extension_degree + 1);
+            for _i in 0..=extension_degree {
                 let (k2, k2_pub) = random_keypair(&factory, extension_degree, &mut rng);
                 k2_vec.push(k2);
                 k2_pub_vec.push(k2_pub);
@@ -426,15 +404,15 @@ mod test {
                 c_sum = c_sum + k2_pub.clone();
             }
             // Right-hand side
-            let mut k_sum_vec = Vec::with_capacity(extension_degree as usize);
-            for i in 0..extension_degree as usize {
+            let mut k_sum_vec = Vec::with_capacity(extension_degree + 1);
+            for i in 0..=extension_degree {
                 k_sum_vec.push(&k1_vec[i] + &k2_vec[i]);
             }
             let c2 = factory.commit_extended(&k_sum_vec, &v1).unwrap();
             // Test
             assert!(factory.open_extended(&k_sum_vec, &v1, &c2).unwrap());
             match extension_degree {
-                ExtensionDegree::Zero => {
+                0 => {
                     assert_eq!(c_sum, c2.0);
                 },
                 _ => {
@@ -483,8 +461,8 @@ mod test {
     fn sum_commitment_vector_extended() {
         let mut rng = rand::thread_rng();
         let v_zero = RistrettoSecretKey::default();
-        let k_zero = vec![RistrettoSecretKey::default(); ExtensionDegree::Five as usize];
-        for extension_degree in EXTENSION_DEGREE {
+        let k_zero = vec![RistrettoSecretKey::default(); 5];
+        for extension_degree in 1..6 {
             let mut v_sum = RistrettoSecretKey::default();
             let mut k_sum_vec = vec![RistrettoSecretKey::default(); extension_degree as usize];
             let factory = ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
@@ -529,7 +507,7 @@ mod test {
     #[test]
     fn serialize_deserialize_extended() {
         let mut rng = rand::thread_rng();
-        for extension_degree in EXTENSION_DEGREE {
+        for extension_degree in 1..6 {
             let factory = ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
             let k_vec = vec![RistrettoSecretKey::random(&mut rng); extension_degree as usize];
             let c = factory.commit_value_extended(&k_vec, 420).unwrap();
@@ -600,7 +578,7 @@ mod test {
 
     #[test]
     fn derived_methods_extended() {
-        for extension_degree in EXTENSION_DEGREE {
+        for extension_degree in 1..6 {
             let factory = ExtendedPedersenCommitmentFactory::new_with_extension_degree(extension_degree).unwrap();
             let k_vec = vec![RistrettoSecretKey::from(1024); extension_degree as usize];
             let value = 2048;
@@ -614,7 +592,7 @@ mod test {
             let mut hasher = DefaultHasher::new();
             c1.hash(&mut hasher);
             match extension_degree {
-                ExtensionDegree::Zero => {
+                1 => {
                     assert_eq!(
                         format!("{:?}", c1),
                         "HomomorphicCommitment(f09a7f46c5e3cbadc4c1e84c10278cffab2cb902f7b6f37223c88dd548877a6a)"
@@ -622,7 +600,7 @@ mod test {
                     let result = format!("{:x}", hasher.finish());
                     assert_eq!(&result, "b1b43e91f6d6109f");
                 },
-                ExtensionDegree::One => {
+                2 => {
                     assert_eq!(
                         format!("{:?}", c1),
                         "HomomorphicCommitment(2486eca30cadb896bc192e53de7d26361b44ddf892ee3e67a6b232483a8e167e)"
@@ -630,7 +608,7 @@ mod test {
                     let result = format!("{:x}", hasher.finish());
                     assert_eq!(&result, "85b6de79a0c73eef");
                 },
-                ExtensionDegree::Two => {
+                3 => {
                     assert_eq!(
                         format!("{:?}", c1),
                         "HomomorphicCommitment(9c46efbf4652570045bcd519631aba3e13265a5f75e2b90473b2f556b4a5cc4c)"
@@ -638,7 +616,7 @@ mod test {
                     let result = format!("{:x}", hasher.finish());
                     assert_eq!(&result, "5784c866707a1107");
                 },
-                ExtensionDegree::Three => {
+                4 => {
                     assert_eq!(
                         format!("{:?}", c1),
                         "HomomorphicCommitment(4cb95250992c6c71260957403e331d6a7d1f3dd82500699007a2c32b4dff7a23)"
@@ -646,7 +624,7 @@ mod test {
                     let result = format!("{:x}", hasher.finish());
                     assert_eq!(&result, "7b2c5512ec8a20ee");
                 },
-                ExtensionDegree::Four => {
+                5 => {
                     assert_eq!(
                         format!("{:?}", c1),
                         "HomomorphicCommitment(9c877782e158d5fc982ef4cb88a3d3d7eec58f86e55f2e662eacbf6faa6fe21e)"
@@ -654,13 +632,16 @@ mod test {
                     let result = format!("{:x}", hasher.finish());
                     assert_eq!(&result, "bde140256c260df0");
                 },
-                ExtensionDegree::Five => {
+                6 => {
                     assert_eq!(
                         format!("{:?}", c1),
                         "HomomorphicCommitment(86384602b8f880c75df5ce0629d5c472ec7d882c00d7de7c5d68463a7a6ec35b)"
                     );
                     let result = format!("{:x}", hasher.finish());
                     assert_eq!(&result, "88db07fcdaf311d8");
+                },
+                _ => {
+                    panic!("Unreachable")
                 },
             }
 
