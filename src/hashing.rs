@@ -253,6 +253,12 @@ impl<D: Digest, M: DomainSeparation> DomainSeparatedHasher<D, M> {
         self
     }
 
+    /// A convenience function to update, then finalize the hasher and return the hash result.
+    pub fn digest(mut self, data: &[u8]) -> DomainSeparatedHash<D> {
+        self.update(data);
+        self.finalize()
+    }
+
     /// Finalize the hasher and return the hash result.
     pub fn finalize(self) -> DomainSeparatedHash<D> {
         let output = self.inner.finalize();
@@ -520,30 +526,56 @@ mod test {
     /// Test that it can be used as a standard digest
     #[test]
     fn use_as_digest() {
-        fn hash_test<D: Digest>(data: &[u8], expected: &str) {
-            let mut hasher = D::new();
-            hasher.update(data);
-            let hash = hasher.finalize();
+        fn hash_test_standard_digest<D: Digest>(data: &[u8], expected: &str) {
+            let hash = D::digest(data);
             assert_eq!(to_hex(&hash), expected);
         }
 
+        let data = [0, 0, 0];
+
+        hash_domain!(GenericHashDomain, "com.tari.generic");
+        type GenericHasher<D> = DomainSeparatedHasher<D, GenericHashDomain>;
+        let expected_hash = "30b95da070278a2d0f13cc8c65b74d4be288560de2f93967074918ab7d06ec31";
+        // Using as 'DomainSeparatedHasher'
+        let hash = GenericHasher::<Blake256>::new("").digest(&data);
+        assert_eq!(to_hex(hash.as_ref()), expected_hash);
+        let hash = GenericHasher::<Blake256>::new("my_label").digest(&data);
+        assert_ne!(to_hex(hash.as_ref()), expected_hash);
+        // Using as a standard digest
+        hash_test_standard_digest::<GenericHasher<Blake256>>(&data, expected_hash);
+
         hash_domain!(MyDemoHasher, "com.macro.test");
-        hash_test::<DomainSeparatedHasher<Blake256, MyDemoHasher>>(
-            &[0, 0, 0],
-            "5faa7d48b551362bbee8a02c43e6ab634ed47c58ecf7b353f9afedfe3d574608",
-        );
+        type DemoDomainHasher1<D> = DomainSeparatedHasher<D, MyDemoHasher>;
+        let expected_hash = "5faa7d48b551362bbee8a02c43e6ab634ed47c58ecf7b353f9afedfe3d574608";
+        // Using as 'DomainSeparatedHasher'
+        let hash = DemoDomainHasher1::<Blake256>::new("").digest(&data);
+        assert_eq!(to_hex(hash.as_ref()), expected_hash);
+        let hash = DemoDomainHasher1::<Blake256>::new("my_label").digest(&data);
+        assert_ne!(to_hex(hash.as_ref()), expected_hash);
+        // Using as a standard digest
+        hash_test_standard_digest::<DemoDomainHasher1<Blake256>>(&data, expected_hash);
 
         hash_domain!(MyDemoHasher2, "com.macro.test", 2);
-        hash_test::<DomainSeparatedHasher<Blake256, MyDemoHasher2>>(
-            &[0, 0, 0],
-            "7ea9d671008380ea79d29205ac5436a62ba534c710298b9482f20d488c96060d",
-        );
+        type DemoDomainHasher2<D> = DomainSeparatedHasher<D, MyDemoHasher2>;
+        let expected_hash = "7ea9d671008380ea79d29205ac5436a62ba534c710298b9482f20d488c96060d";
+        // Using as 'DomainSeparatedHasher'
+        let hash = DemoDomainHasher2::<Blake256>::new("").digest(&data);
+        assert_eq!(to_hex(hash.as_ref()), expected_hash);
+        let hash = DemoDomainHasher2::<Blake256>::new("my_label").digest(&data);
+        assert_ne!(to_hex(hash.as_ref()), expected_hash);
+        // Using as a standard digest
+        hash_test_standard_digest::<DemoDomainHasher2<Blake256>>(&data, expected_hash);
 
         hash_domain!(TariHasher, "com.tari.hasher");
-        hash_test::<DomainSeparatedHasher<Blake256, TariHasher>>(
-            &[0, 0, 0],
-            "0706e40badfe77547d143b0664e8ff190538d4077c6136abad915e4415d3c2ef",
-        );
+        type TariDomainHasher<D> = DomainSeparatedHasher<D, TariHasher>;
+        let expected_hash = "0706e40badfe77547d143b0664e8ff190538d4077c6136abad915e4415d3c2ef";
+        // Using as 'DomainSeparatedHasher'
+        let hash = TariDomainHasher::<Blake256>::new("").digest(&data);
+        assert_eq!(to_hex(hash.as_ref()), expected_hash);
+        let hash = TariDomainHasher::<Blake256>::new("my_label").digest(&data);
+        assert_ne!(to_hex(hash.as_ref()), expected_hash);
+        // Using as a standard digest
+        hash_test_standard_digest::<TariDomainHasher<Blake256>>(&data, expected_hash);
     }
 
     #[test]
