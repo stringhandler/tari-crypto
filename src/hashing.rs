@@ -32,15 +32,28 @@ use alloc::string::String;
 use core::{marker::PhantomData, ops::Deref};
 
 use blake2::{Blake2b, Blake2bVar};
-use digest::{consts::U32, Digest, FixedOutput, FixedOutputReset, Output, OutputSizeUser, Update};
+use digest::{
+    consts::{U32, U64},
+    Digest,
+    FixedOutput,
+    FixedOutputReset,
+    Output,
+    OutputSizeUser,
+    Update,
+};
 use sha3::Sha3_256;
-use tari_utilities::ByteArray;
 
 use crate::{
     alloc::string::ToString,
     errors::{HashingError, SliceError},
     keys::SecretKey,
 };
+
+/// Wrapper type for 256-bit `Blake2` hasher
+pub type Blake2b256 = Blake2b<U32>;
+
+/// Wrapper type for 512-bit `Blake2` hasher
+pub type Blake2b512 = Blake2b<U64>;
 
 /// The `DomainSeparation` trait is used to inject domain separation tags into the [`DomainSeparatedHasher`] in a
 /// way that can be applied consistently, but without hard-coding anything into the hasher itself.
@@ -209,12 +222,11 @@ impl<D: Digest> AsRef<[u8]> for DomainSeparatedHash<D> {
 /// Calculating a signature challenge
 ///
 /// ```
+/// # use blake2::Digest;
 /// # use tari_utilities::hex::{to_hex, Hex};
-/// use blake2::{Blake2b, Digest};
-/// use digest::consts::U32;
-/// use tari_crypto::{
+/// # use tari_crypto::{
 ///     hash_domain,
-///     hashing::{DomainSeparatedHash, DomainSeparatedHasher, DomainSeparation},
+///     hashing::{Blake2b256, DomainSeparatedHash, DomainSeparatedHasher, DomainSeparation},
 /// };
 ///
 /// hash_domain!(CardHashDomain, "com.cards");
@@ -224,8 +236,8 @@ impl<D: Digest> AsRef<[u8]> for DomainSeparatedHash<D> {
 ///     strength: u8,
 /// }
 ///
-/// fn calculate_challenge(msg: &str) -> DomainSeparatedHash<Blake2b<U32>> {
-///     DomainSeparatedHasher::<Blake2b<U32>, CardHashDomain>::new_with_label("schnorr_challenge")
+/// fn calculate_challenge(msg: &str) -> DomainSeparatedHash<Blake2b256> {
+///     DomainSeparatedHasher::<Blake2b256, CardHashDomain>::new_with_label("schnorr_challenge")
 ///         .chain_update(msg.as_bytes())
 ///         .finalize()
 /// }
@@ -416,7 +428,9 @@ impl LengthExtensionAttackResistant for Blake2bVar {}
 
 impl LengthExtensionAttackResistant for Sha3_256 {}
 
-impl LengthExtensionAttackResistant for Blake2b<U32> {}
+impl LengthExtensionAttackResistant for Blake2b256 {}
+
+impl LengthExtensionAttackResistant for Blake2b512 {}
 
 //------------------------------------------------    HMAC  ------------------------------------------------------------
 /// A domain separation tag for use in MAC derivation algorithms.
@@ -524,55 +538,57 @@ impl<D: Digest> Deref for Mac<D> {
 /// # use tari_crypto::keys::SecretKey;
 /// # use tari_crypto::ristretto::ristretto_keys::RistrettoKdf;
 /// # use tari_crypto::ristretto::RistrettoSecretKey;
-/// # use digest::consts::U32;
-/// # use blake2::Blake2b;
+/// # use tari_crypto::hashing::Blake2b512;
 ///
 /// fn wallet_keys(
 ///     primary_key: &RistrettoSecretKey,
 ///     index: usize,
 /// ) -> Result<RistrettoSecretKey, HashingError> {
-///     RistrettoKdf::generate::<Blake2b<U32>>(
-///         primary_key.as_bytes(),
-///         &index.to_le_bytes(),
-///         "wallet",
-///     )
+///     RistrettoKdf::generate::<Blake2b512>(primary_key.as_bytes(), &index.to_le_bytes(), "wallet")
 /// }
 ///
 /// let key = RistrettoSecretKey::from_hex(
-///     "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
+///     "a8fb609c5ab7cc07548b076b6c25cc3237c4526fb7a6dcb83b26f457b172c20a",
 /// )
 /// .unwrap();
 /// let key_1 = wallet_keys(&key, 1).unwrap();
 /// assert_eq!(
 ///     key_1.to_hex(),
-///     "b778b8b5041fbde6c78be5bafd6d62633824bf303c97736d7337b3f6f70c4e0b"
+///     "08106b88a2ff4c52d1d8b458cf34802df8655ba989a7d91351e3504e087a2e0c"
 /// );
 /// let key_64 = wallet_keys(&key, 64).unwrap();
 /// assert_eq!(
 ///     key_64.to_hex(),
-///     "09e5204c93406ef3334ff5f7a4d5d84199ceb9119fafcb98928fa95e95f0ae05"
+///     "2c2206dadd2a21e71b6c52dd321572cde0f2b00e7116e1123fb580b09ed1b70e"
 /// );
 /// ```
 pub trait DerivedKeyDomain: DomainSeparation {
     /// The associated derived secret key type
     type DerivedKeyType: SecretKey;
 
-    /// Derive a key from the input key using a suitable domain separation tag and the given application label.
-    /// An error is returned if the supplied primary key isn't at least as long as the digest algorithm's output size.
+    /// Derive a key from the input key using a suitable domain separation tag and the given application label by wide
+    /// reduction. An error is returned if the supplied primary key isn't at least as long as the derived key.
     /// If the digest's output size is not sufficient to generate the derived key type, then an error will be thrown.
     fn generate<D>(primary_key: &[u8], data: &[u8], label: &'static str) -> Result<Self::DerivedKeyType, HashingError>
     where
         Self: Sized,
         D: Digest + Update,
     {
-        if primary_key.as_ref().len() < <D as Digest>::output_size() {
+        // Ensure the primary key is at least as long as the derived key
+        if primary_key.len() < <Self::DerivedKeyType as SecretKey>::KEY_LEN {
             return Err(HashingError::InputTooShort {});
         }
+
+        // Ensure the digest length is suitable for wide reduction
+        if <D as Digest>::output_size() != <Self::DerivedKeyType as SecretKey>::WIDE_REDUCTION_LEN {
+            return Err(HashingError::InputTooShort {});
+        }
+
         let hash = DomainSeparatedHasher::<D, Self>::new_with_label(label)
             .chain(primary_key)
             .chain(data)
             .finalize();
-        let derived_key = Self::DerivedKeyType::from_bytes(hash.as_ref())
+        let derived_key = Self::DerivedKeyType::from_bytes_wide(hash.as_ref())
             .map_err(|e| HashingError::ConversionFromBytes { reason: e.to_string() })?;
         Ok(derived_key)
     }
@@ -633,17 +649,14 @@ pub fn create_hasher<D: Digest, HD: DomainSeparation>() -> DomainSeparatedHasher
 #[cfg(test)]
 mod test {
     use blake2::Blake2b;
-    use digest::{
-        consts::{U32, U64},
-        generic_array::GenericArray,
-        Digest,
-        Update,
-    };
+    use digest::{consts::U32, generic_array::GenericArray, Digest, Update};
     use tari_utilities::hex::{from_hex, to_hex};
 
     use crate::hashing::{
         byte_to_decimal_ascii_bytes,
         AsFixedBytes,
+        Blake2b256,
+        Blake2b512,
         DomainSeparatedHasher,
         DomainSeparation,
         Mac,
@@ -671,7 +684,7 @@ mod test {
     #[test]
     fn hasher_macro_tests() {
         {
-            hasher!(Blake2b<U32>, MyDemoHasher, "com.macro.test");
+            hasher!(Blake2b256, MyDemoHasher, "com.macro.test");
 
             util::hash_from_digest(
                 MyDemoHasher::new(),
@@ -680,7 +693,7 @@ mod test {
             );
         }
         {
-            hasher!(Blake2b<U32>, MyDemoHasher2, "com.macro.test", 1);
+            hasher!(Blake2b256, MyDemoHasher2, "com.macro.test", 1);
 
             util::hash_from_digest(
                 MyDemoHasher2::new(),
@@ -702,7 +715,7 @@ mod test {
     #[test]
     fn finalize_into() {
         hash_domain!(TestHasher, "com.example.test");
-        let mut hasher = DomainSeparatedHasher::<Blake2b<U32>, TestHasher>::new();
+        let mut hasher = DomainSeparatedHasher::<Blake2b256, TestHasher>::new();
         hasher.update([0, 0, 0]);
 
         let mut output = GenericArray::<u8, U32>::default();
@@ -712,7 +725,7 @@ mod test {
     #[test]
     fn finalize_into_reset() {
         hash_domain!(TestHasher, "com.example.test");
-        let mut hasher = DomainSeparatedHasher::<Blake2b<U32>, TestHasher>::new();
+        let mut hasher = DomainSeparatedHasher::<Blake2b256, TestHasher>::new();
         hasher.update([0, 0, 0]);
 
         let mut output = GenericArray::<u8, U32>::default();
@@ -725,7 +738,7 @@ mod test {
         use zeroize::Zeroize;
 
         hash_domain!(TestHasher, "com.example.test");
-        let mut hasher = DomainSeparatedHasher::<Blake2b<U32>, TestHasher>::new();
+        let mut hasher = DomainSeparatedHasher::<Blake2b256, TestHasher>::new();
         hasher.update([0, 0, 0]);
 
         hidden_type!(Key, SafeArray<u8, 32>);
@@ -737,10 +750,10 @@ mod test {
     fn dst_hasher() {
         hash_domain!(GenericHashDomain, "com.tari.generic");
         assert_eq!(GenericHashDomain::domain_separation_tag(""), "com.tari.generic.v1");
-        let hash = DomainSeparatedHasher::<Blake2b<U32>, GenericHashDomain>::new_with_label("test_hasher")
+        let hash = DomainSeparatedHasher::<Blake2b256, GenericHashDomain>::new_with_label("test_hasher")
             .chain("some foo")
             .finalize();
-        let mut hash2 = DomainSeparatedHasher::<Blake2b<U32>, GenericHashDomain>::new_with_label("test_hasher");
+        let mut hash2 = DomainSeparatedHasher::<Blake2b256, GenericHashDomain>::new_with_label("test_hasher");
         hash2.update("some foo");
         let hash2 = hash2.finalize();
         assert_eq!(hash.as_ref(), hash2.as_ref());
@@ -750,8 +763,8 @@ mod test {
         );
 
         let hash_1 =
-            DomainSeparatedHasher::<Blake2b<U32>, GenericHashDomain>::new_with_label("mynewtest").digest(b"rincewind");
-        let hash_2 = DomainSeparatedHasher::<Blake2b<U32>, GenericHashDomain>::new_with_label("mynewtest")
+            DomainSeparatedHasher::<Blake2b256, GenericHashDomain>::new_with_label("mynewtest").digest(b"rincewind");
+        let hash_2 = DomainSeparatedHasher::<Blake2b256, GenericHashDomain>::new_with_label("mynewtest")
             .chain(b"rincewind")
             .finalize();
         assert_eq!(hash_1.as_ref(), hash_2.as_ref());
@@ -761,12 +774,12 @@ mod test {
     fn digest_is_the_same_as_standard_api() {
         hash_domain!(MyDemoHasher, "com.macro.test");
         assert_eq!(MyDemoHasher::domain_separation_tag(""), "com.macro.test.v1");
-        util::hash_test::<DomainSeparatedHasher<Blake2b<U32>, MyDemoHasher>>(
+        util::hash_test::<DomainSeparatedHasher<Blake2b256, MyDemoHasher>>(
             &[0, 0, 0],
             "d4cbf5b6b97485a991973db8a6ce4d3fc660db5dff5f55f2b0cb363fca34b0a2",
         );
 
-        let mut hasher = DomainSeparatedHasher::<Blake2b<U32>, MyDemoHasher>::new();
+        let mut hasher = DomainSeparatedHasher::<Blake2b256, MyDemoHasher>::new();
         hasher.update([0, 0, 0]);
         let hash = hasher.finalize();
         assert_eq!(
@@ -774,7 +787,7 @@ mod test {
             "d4cbf5b6b97485a991973db8a6ce4d3fc660db5dff5f55f2b0cb363fca34b0a2"
         );
 
-        let mut hasher = DomainSeparatedHasher::<Blake2b<U32>, MyDemoHasher>::new_with_label("");
+        let mut hasher = DomainSeparatedHasher::<Blake2b256, MyDemoHasher>::new_with_label("");
         hasher.update([0, 0, 0]);
         let hash = hasher.finalize();
         assert_eq!(
@@ -788,21 +801,21 @@ mod test {
     fn can_be_used_as_digest() {
         hash_domain!(MyDemoHasher, "com.macro.test");
         assert_eq!(MyDemoHasher::domain_separation_tag(""), "com.macro.test.v1");
-        util::hash_test::<DomainSeparatedHasher<Blake2b<U32>, MyDemoHasher>>(
+        util::hash_test::<DomainSeparatedHasher<Blake2b256, MyDemoHasher>>(
             &[0, 0, 0],
             "d4cbf5b6b97485a991973db8a6ce4d3fc660db5dff5f55f2b0cb363fca34b0a2",
         );
 
         hash_domain!(MyDemoHasher2, "com.macro.test", 2);
         assert_eq!(MyDemoHasher2::domain_separation_tag(""), "com.macro.test.v2");
-        util::hash_test::<DomainSeparatedHasher<Blake2b<U32>, MyDemoHasher2>>(
+        util::hash_test::<DomainSeparatedHasher<Blake2b256, MyDemoHasher2>>(
             &[0, 0, 0],
             "ce327b02271d035bad4dcc1e69bc292392ee4ee497f1f8467d54bf4b4c72639a",
         );
 
         hash_domain!(TariHasher, "com.tari.hasher");
         assert_eq!(TariHasher::domain_separation_tag(""), "com.tari.hasher.v1");
-        util::hash_test::<DomainSeparatedHasher<Blake2b<U32>, TariHasher>>(
+        util::hash_test::<DomainSeparatedHasher<Blake2b256, TariHasher>>(
             &[0, 0, 0],
             "ae359f05bb76c646c6767d25f53893fc38b0c7b56f8a74a1cbb008ea3ffc183f",
         );
@@ -812,7 +825,7 @@ mod test {
     #[test]
     fn hash_to_fixed_bytes_conversion() {
         hash_domain!(TestDomain, "com.tari.generic");
-        let hash = DomainSeparatedHasher::<Blake2b<U32>, TestDomain>::new_with_label("mytest")
+        let hash = DomainSeparatedHasher::<Blake2b256, TestDomain>::new_with_label("mytest")
             .chain("some data")
             .finalize();
         let hash_to_bytes_7: [u8; 7] = hash.as_fixed_bytes().unwrap();
@@ -827,7 +840,7 @@ mod test {
     fn deconstruction() {
         hash_domain!(TestDomain, "com.tari.generic");
         // Illustrate exactly what gets hashed and how we try and avoid collisions
-        let hash = DomainSeparatedHasher::<Blake2b<U32>, TestDomain>::new_with_label("mytest")
+        let hash = DomainSeparatedHasher::<Blake2b256, TestDomain>::new_with_label("mytest")
             .chain("rincewind")
             .chain("hex")
             .finalize();
@@ -857,7 +870,7 @@ mod test {
         }
         let domain = "com.discworld.v42.turtles";
         assert_eq!(MyDemoHasher::domain_separation_tag("turtles"), domain);
-        let hash = DomainSeparatedHasher::<Blake2b<U32>, MyDemoHasher>::new_with_label("turtles").finalize();
+        let hash = DomainSeparatedHasher::<Blake2b256, MyDemoHasher>::new_with_label("turtles").finalize();
         let expected = Blake2b::<U32>::default()
             .chain((domain.len() as u64).to_le_bytes())
             .chain(domain)
@@ -892,7 +905,7 @@ mod test {
                 "com.discworld"
             }
         }
-        let hash = DomainSeparatedHasher::<Blake2b<U64>, MyDemoHasher>::new_with_label("turtles")
+        let hash = DomainSeparatedHasher::<Blake2b512, MyDemoHasher>::new_with_label("turtles")
             .chain("elephants")
             .finalize();
         assert_eq!(to_hex(hash.as_ref()), "64a89c7160a1076a725fac97d3f67803abd0991d82518a595072fa62df4c870bddee9160f591231c381087831bf6925616013de317ce0b02846585caf41942ac");
@@ -905,7 +918,7 @@ mod test {
         // let mac = Mac::generate::<Sha256, _, _>(&key, "test message", "test");
         //          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `LengthExtensionAttackResistant` is not implemented for
         //          `Sha256`
-        let mac = Mac::<Blake2b<U32>>::generate(key, "test message", "test");
+        let mac = Mac::<Blake2b256>::generate(key, "test message", "test");
         assert_eq!(MacDomain::domain_separation_tag("test"), "com.tari.mac.v1.test");
         assert_eq!(
             to_hex(mac.as_ref()),

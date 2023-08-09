@@ -12,15 +12,14 @@ use core::{
     ops::{Add, Mul},
 };
 
-use blake2::Blake2b;
-use digest::{consts::U32, Digest};
+use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
 use snafu::prelude::*;
 use tari_utilities::ByteArray;
 
 use crate::{
     hash_domain,
-    hashing::{DomainSeparatedHash, DomainSeparatedHasher, DomainSeparation},
+    hashing::{Blake2b512, DomainSeparatedHash, DomainSeparatedHasher, DomainSeparation},
     keys::{PublicKey, SecretKey},
 };
 
@@ -106,7 +105,7 @@ where
     pub fn sign_raw<'a>(secret: &'a K, nonce: K, challenge: &[u8]) -> Result<Self, SchnorrSignatureError>
     where K: Add<Output = K> + Mul<&'a K, Output = K> {
         // s = r + e.k
-        let e = match K::from_bytes(challenge) {
+        let e = match K::from_bytes_wide(challenge) {
             Ok(e) => e,
             Err(_) => return Err(SchnorrSignatureError::InvalidChallenge),
         };
@@ -158,7 +157,7 @@ where
         let public_nonce = P::from_secret_key(&nonce);
         let public_key = P::from_secret_key(secret);
         let challenge =
-            Self::construct_domain_separated_challenge::<_, Blake2b<U32>>(&public_nonce, &public_key, message);
+            Self::construct_domain_separated_challenge::<_, Blake2b512>(&public_nonce, &public_key, message);
         Self::sign_raw(secret, nonce, challenge.as_ref())
     }
 
@@ -196,7 +195,7 @@ where
         B: AsRef<[u8]>,
     {
         let challenge =
-            Self::construct_domain_separated_challenge::<_, Blake2b<U32>>(&self.public_nonce, public_key, message);
+            Self::construct_domain_separated_challenge::<_, Blake2b512>(&self.public_nonce, public_key, message);
         self.verify_challenge(public_key, challenge.as_ref())
     }
 
@@ -207,7 +206,7 @@ where
         for<'b> &'b K: Mul<&'a P, Output = P>,
         for<'b> &'b P: Add<P, Output = P>,
     {
-        let e = match K::from_bytes(challenge) {
+        let e = match K::from_bytes_wide(challenge) {
             Ok(e) => e,
             Err(_) => return false,
         };

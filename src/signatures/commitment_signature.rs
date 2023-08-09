@@ -92,7 +92,7 @@ where
         for<'a> &'a K: Mul<&'a K, Output = K>,
         C: HomomorphicCommitmentFactory<P = P>,
     {
-        let e = match K::from_bytes(challenge) {
+        let e = match K::from_bytes_wide(challenge) {
             Ok(e) => e,
             Err(_) => return Err(CommitmentSignatureError::InvalidChallenge),
         };
@@ -120,7 +120,7 @@ where
         for<'b> &'b HomomorphicCommitment<P>: Add<&'b HomomorphicCommitment<P>, Output = HomomorphicCommitment<P>>,
         C: HomomorphicCommitmentFactory<P = P>,
     {
-        let e = match K::from_bytes(challenge) {
+        let e = match K::from_bytes_wide(challenge) {
             Ok(e) => e,
             Err(_) => return false,
         };

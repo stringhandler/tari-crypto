@@ -18,7 +18,7 @@ use crate::{
 ///
 /// ## Creating signatures
 ///
-/// You can create a `RisrettoSchnorr` from it's component parts:
+/// You can create a `RisrettoSchnorr` from its component parts:
 ///
 /// ```edition2018
 /// # use tari_crypto::ristretto::*;
@@ -31,7 +31,10 @@ use crate::{
 ///     "6a493210f7499cd17fecb510ae0cea23a110e8d5b901f8acadd3095c73a3b919",
 /// )
 /// .unwrap();
-/// let s = RistrettoSecretKey::from_bytes(b"10000000000000000000000000000000").unwrap();
+/// let s = RistrettoSecretKey::from_hex(
+///     "f62fccf7734099d32937f7f767757abcb6eca70f43b3a7fb6500b2cb9ea12b02",
+/// )
+/// .unwrap();
 /// let sig = RistrettoSchnorr::new(public_r, s);
 /// ```
 ///
@@ -121,14 +124,15 @@ pub type RistrettoSchnorrWithDomain<H> = SchnorrSignature<RistrettoPublicKey, Ri
 #[cfg(test)]
 mod test {
     use blake2::Blake2b;
-    use digest::{consts::U32, Digest};
+    use digest::{consts::U64, Digest};
     use tari_utilities::{
-        hex::{from_hex, to_hex, Hex},
+        hex::{to_hex, Hex},
         ByteArray,
     };
 
     use crate::{
         hash_domain,
+        hashing::Blake2b512,
         keys::{PublicKey, SecretKey},
         ristretto::{
             ristretto_sig::RistrettoSchnorrWithDomain,
@@ -154,12 +158,12 @@ mod test {
         let (k, P) = RistrettoPublicKey::random_keypair(&mut rng);
         let (r, R) = RistrettoPublicKey::random_keypair(&mut rng);
         // Use sign raw, and bind the nonce and public key manually
-        let e = Blake2b::<U32>::new()
+        let e = Blake2b::<U64>::new()
             .chain_update(P.as_bytes())
             .chain_update(R.as_bytes())
             .chain_update(b"Small Gods")
             .finalize();
-        let e_key = RistrettoSecretKey::from_bytes(&e).unwrap();
+        let e_key = RistrettoSecretKey::from_bytes_wide(&e).unwrap();
         let s = &r + &e_key * &k;
         let sig = RistrettoSchnorr::sign_raw(&k, r, &e).unwrap();
         let R_calc = sig.get_public_nonce();
@@ -169,7 +173,7 @@ mod test {
         // Doesn't work for invalid credentials
         assert!(!sig.verify_challenge(&R, &e));
         // Doesn't work for different challenge
-        let wrong_challenge = Blake2b::<U32>::digest(b"Guards! Guards!");
+        let wrong_challenge = Blake2b::<U64>::digest(b"Guards! Guards!");
         assert!(!sig.verify_challenge(&P, &wrong_challenge));
     }
 
@@ -185,7 +189,7 @@ mod test {
         let (k2, P2) = RistrettoPublicKey::random_keypair(&mut rng);
         let (r2, R2) = RistrettoPublicKey::random_keypair(&mut rng);
         // Each of them creates the Challenge = H(R1 || R2 || P1 || P2 || m)
-        let e = Blake2b::<U32>::new()
+        let e = Blake2b::<U64>::new()
             .chain_update(R1.as_bytes())
             .chain_update(R2.as_bytes())
             .chain_update(P1.as_bytes())
@@ -202,18 +206,6 @@ mod test {
         assert!(s_agg.verify_challenge(&(P1 + P2), &e));
     }
 
-    /// Ristretto scalars have a max value 2^255. This test checks that hashed messages above this value can still be
-    /// signed as a result of applying modulo arithmetic on the challenge value
-    #[test]
-    #[allow(non_snake_case)]
-    fn challenge_from_invalid_scalar() {
-        let mut rng = rand::thread_rng();
-        let m = from_hex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff").unwrap();
-        let k = RistrettoSecretKey::random(&mut rng);
-        let r = RistrettoSecretKey::random(&mut rng);
-        assert!(RistrettoSchnorr::sign_raw(&k, r, &m).is_ok());
-    }
-
     #[test]
     #[allow(non_snake_case)]
     fn domain_separated_challenge() {
@@ -222,10 +214,10 @@ mod test {
         let R =
             RistrettoPublicKey::from_hex("fa14cb581ce5717248444721242e6b195a482d503a853dea4acb513074d8d803").unwrap();
         let msg = "Moving Pictures";
-        let hash = SchnorrSignature::<_, _, SchnorrSigChallenge>::construct_domain_separated_challenge::<_, Blake2b<U32>>(
+        let hash = SchnorrSignature::<_, _, SchnorrSigChallenge>::construct_domain_separated_challenge::<_, Blake2b512>(
             &R, &P, msg,
         );
-        let naiive = Blake2b::<U32>::new()
+        let naiive = Blake2b::<U64>::new()
             .chain_update(R.as_bytes())
             .chain_update(P.as_bytes())
             .chain_update(msg)
@@ -234,7 +226,7 @@ mod test {
         assert_ne!(hash.as_ref(), naiive.as_bytes());
         assert_eq!(
             to_hex(hash.as_ref()),
-            "d8f6b29b641113c91175b8d44f265ff1167d58d5aa5ee03e6f1f521505b09d80"
+            "2db0656c9dd1482bf61d32f157726b05a88d567c31107bed9a5c60a02119518af35929f360726bffd846439ab12e7c9f4983cf5fab5ea735422e05e0f560ddfd"
         );
     }
 
