@@ -26,7 +26,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{
     errors::HashingError,
-    hashing::{Blake2b512, DerivedKeyDomain, DomainSeparatedHasher, DomainSeparation},
+    hashing::{DerivedKeyDomain, DomainSeparatedHasher, DomainSeparation},
     keys::{PublicKey, SecretKey},
 };
 
@@ -317,7 +317,7 @@ impl RistrettoPublicKey {
     /// A verifiable group generator using a domain separated hasher
     pub fn new_generator(label: &'static str) -> Result<RistrettoPublicKey, HashingError> {
         // This function requires 512 bytes of data, so let's be opinionated here and use blake2b
-        let hash = DomainSeparatedHasher::<Blake2b512, RistrettoGeneratorPoint>::new_with_label(label).finalize();
+        let hash = DomainSeparatedHasher::<Blake2b<U64>, RistrettoGeneratorPoint>::new_with_label(label).finalize();
         if hash.as_ref().len() < 64 {
             return Err(HashingError::DigestTooShort { bytes: 64 });
         }
@@ -618,14 +618,12 @@ impl From<RistrettoPublicKey> for CompressedRistretto {
 
 #[cfg(test)]
 mod test {
+    use blake2::Blake2b;
+    use digest::consts::{U32, U64};
     use tari_utilities::ByteArray;
 
     use super::*;
-    use crate::{
-        hashing::{Blake2b256, Blake2b512},
-        keys::PublicKey,
-        ristretto::test_common::get_keypair,
-    };
+    use crate::{keys::PublicKey, ristretto::test_common::get_keypair};
 
     fn assert_completely_equal(k1: &RistrettoPublicKey, k2: &RistrettoPublicKey) {
         assert_eq!(k1, k2);
@@ -991,10 +989,10 @@ mod test {
 
     #[test]
     fn kdf_too_short() {
-        let err = RistrettoKdf::generate::<Blake2b256>(b"this_hasher_is_too_short", b"data", "test").err();
+        let err = RistrettoKdf::generate::<Blake2b<U32>>(b"this_hasher_is_too_short", b"data", "test").err();
         assert!(matches!(err, Some(HashingError::InputTooShort {})));
 
-        let err = RistrettoKdf::generate::<Blake2b512>(b"this_key_is_too_short", b"data", "test").err();
+        let err = RistrettoKdf::generate::<Blake2b<U64>>(b"this_key_is_too_short", b"data", "test").err();
         assert!(matches!(err, Some(HashingError::InputTooShort {})));
     }
 
@@ -1002,8 +1000,8 @@ mod test {
     fn kdf_test() {
         let key =
             RistrettoSecretKey::from_hex("45c5b950e04167785ff735bead8d746740db04bce3ee2c1f6523bdc59023e50e").unwrap();
-        let derived1 = RistrettoKdf::generate::<Blake2b512>(key.as_bytes(), b"derived1", "test").unwrap();
-        let derived2 = RistrettoKdf::generate::<Blake2b512>(key.as_bytes(), b"derived2", "test").unwrap();
+        let derived1 = RistrettoKdf::generate::<Blake2b<U64>>(key.as_bytes(), b"derived1", "test").unwrap();
+        let derived2 = RistrettoKdf::generate::<Blake2b<U64>>(key.as_bytes(), b"derived2", "test").unwrap();
         assert_eq!(
             derived1.to_hex(),
             "22deb0c38ec2dc9f741912f6e3c2cd3f76a5b33142a289da15eecdcd882bda06"

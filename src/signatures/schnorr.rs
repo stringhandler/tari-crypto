@@ -12,14 +12,15 @@ use core::{
     ops::{Add, Mul},
 };
 
-use digest::Digest;
+use blake2::Blake2b;
+use digest::{consts::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
 use snafu::prelude::*;
 use tari_utilities::ByteArray;
 
 use crate::{
     hash_domain,
-    hashing::{Blake2b512, DomainSeparatedHash, DomainSeparatedHasher, DomainSeparation},
+    hashing::{DomainSeparatedHash, DomainSeparatedHasher, DomainSeparation},
     keys::{PublicKey, SecretKey},
 };
 
@@ -157,7 +158,7 @@ where
         let public_nonce = P::from_secret_key(&nonce);
         let public_key = P::from_secret_key(secret);
         let challenge =
-            Self::construct_domain_separated_challenge::<_, Blake2b512>(&public_nonce, &public_key, message);
+            Self::construct_domain_separated_challenge::<_, Blake2b<U64>>(&public_nonce, &public_key, message);
         Self::sign_raw(secret, nonce, challenge.as_ref())
     }
 
@@ -195,7 +196,7 @@ where
         B: AsRef<[u8]>,
     {
         let challenge =
-            Self::construct_domain_separated_challenge::<_, Blake2b512>(&self.public_nonce, public_key, message);
+            Self::construct_domain_separated_challenge::<_, Blake2b<U64>>(&self.public_nonce, public_key, message);
         self.verify_challenge(public_key, challenge.as_ref())
     }
 

@@ -132,7 +132,6 @@ mod test {
 
     use crate::{
         hash_domain,
-        hashing::Blake2b512,
         keys::{PublicKey, SecretKey},
         ristretto::{
             ristretto_sig::RistrettoSchnorrWithDomain,
@@ -214,7 +213,7 @@ mod test {
         let R =
             RistrettoPublicKey::from_hex("fa14cb581ce5717248444721242e6b195a482d503a853dea4acb513074d8d803").unwrap();
         let msg = "Moving Pictures";
-        let hash = SchnorrSignature::<_, _, SchnorrSigChallenge>::construct_domain_separated_challenge::<_, Blake2b512>(
+        let hash = SchnorrSignature::<_, _, SchnorrSigChallenge>::construct_domain_separated_challenge::<_, Blake2b<U64>>(
             &R, &P, msg,
         );
         let naiive = Blake2b::<U64>::new()
