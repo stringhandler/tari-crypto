@@ -17,6 +17,7 @@ use crate::{
     commitment::{HomomorphicCommitment, HomomorphicCommitmentFactory},
     keys::{PublicKey, SecretKey},
 };
+use crate::keys::NonSecretScalar;
 
 /// An error when creating a commitment signature
 #[derive(Clone, Debug, Snafu, PartialEq, Eq)]
@@ -58,21 +59,21 @@ pub enum CommitmentAndPublicKeySignatureError {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "borsh", derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CommitmentAndPublicKeySignature<P, K> {
+pub struct CommitmentAndPublicKeySignature<P, S> {
     ephemeral_commitment: HomomorphicCommitment<P>,
     ephemeral_pubkey: P,
-    u_a: K,
-    u_x: K,
-    u_y: K,
+    u_a: S,
+    u_x: S,
+    u_y: S,
 }
 
-impl<P, K> CommitmentAndPublicKeySignature<P, K>
+impl<P, S> CommitmentAndPublicKeySignature<P, S>
 where
-    P: PublicKey<K = K>,
-    K: SecretKey,
+    P: PublicKey,
+    S: NonSecretScalar,
 {
     /// Creates a new [CommitmentSignature]
-    pub fn new(ephemeral_commitment: HomomorphicCommitment<P>, ephemeral_pubkey: P, u_a: K, u_x: K, u_y: K) -> Self {
+    pub fn new(ephemeral_commitment: HomomorphicCommitment<P>, ephemeral_pubkey: P, u_a: S, u_x: S, u_y: S) -> Self {
         CommitmentAndPublicKeySignature {
             ephemeral_commitment,
             ephemeral_pubkey,
@@ -86,7 +87,7 @@ where
     /// multiparty use case. It is _very important_ that it be computed using strong Fiat-Shamir! Further, the
     /// values `r_a, r_x, r_y` are nonces, must be sampled uniformly at random, and must never be reused.
     #[allow(clippy::too_many_arguments)]
-    pub fn sign<C>(
+    pub fn sign<C, K>(
         a: &K,
         x: &K,
         y: &K,
@@ -97,7 +98,7 @@ where
         factory: &C,
     ) -> Result<Self, CommitmentAndPublicKeySignatureError>
     where
-        K: Mul<P, Output = P>,
+        K: SecretKey + Mul<P, Output = P>,
         for<'a> &'a K: Add<&'a K, Output = K>,
         for<'a> &'a K: Mul<&'a K, Output = K>,
         C: HomomorphicCommitmentFactory<P = P>,
@@ -162,7 +163,7 @@ where
         &self,
         commitment: &'a HomomorphicCommitment<P>,
         pubkey: &'a P,
-        challenge: &K,
+        challenge: &S,
         factory: &C,
         rng: &mut R,
     ) -> bool
@@ -177,7 +178,7 @@ where
         R: RngCore + CryptoRng,
     {
         // The challenge cannot be zero
-        if *challenge == K::default() {
+        if *challenge == S::default() {
             return false;
         }
 

@@ -29,6 +29,16 @@ use crate::{
     hashing::{DerivedKeyDomain, DomainSeparatedHasher, DomainSeparation},
     keys::{PublicKey, SecretKey},
 };
+use crate::keys::{BatchMul, FromSecretKey, NonSecretScalar};
+
+
+pub struct RistrettoNonSecretScalar(pub(crate) Scalar);
+
+impl NonSecretScalar for RistrettoNonSecretScalar {
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 
 /// The [SecretKey](trait.SecretKey.html) implementation for [Ristretto](https://ristretto.group) is a thin wrapper
 /// around the Dalek [Scalar](struct.Scalar.html) type, representing a 256-bit integer (mod the group order).
@@ -66,8 +76,10 @@ impl borsh::BorshDeserialize for RistrettoSecretKey {
     fn deserialize_reader<R>(reader: &mut R) -> Result<Self, borsh::maybestd::io::Error>
     where R: borsh::maybestd::io::Read {
         let bytes: Vec<u8> = borsh::BorshDeserialize::deserialize_reader(reader)?;
-        Self::from_bytes(bytes.as_slice())
-            .map_err(|e| borsh::maybestd::io::Error::new(borsh::maybestd::io::ErrorKind::InvalidInput, e.to_string()))
+        let res = Self::from_bytes(bytes.as_slice())
+            .map_err(|e| borsh::maybestd::io::Error::new(borsh::maybestd::io::ErrorKind::InvalidInput, e.to_string()));
+        bytes.zeroize();
+        res
     }
 }
 
@@ -93,16 +105,12 @@ impl SecretKey for RistrettoSecretKey {
 
         Ok(RistrettoSecretKey(Scalar::from_bytes_mod_order_wide(&bytes_copied)))
     }
-}
 
-//-------------------------------------  Ristretto Secret Key ByteArray  ---------------------------------------------//
-
-impl ByteArray for RistrettoSecretKey {
     /// Return a secret key computed from a canonical byte array
     /// If the byte array is not exactly 32 bytes, returns an error
     /// If the byte array does not represent a canonical encoding, returns an error
-    fn from_bytes(bytes: &[u8]) -> Result<RistrettoSecretKey, ByteArrayError>
-    where Self: Sized {
+    fn from_canonical_bytes(bytes: &[u8]) -> Result<RistrettoSecretKey, ByteArrayError>
+        where Self: Sized {
         if bytes.len() != Self::KEY_LEN {
             return Err(ByteArrayError::IncorrectLength {});
         }
@@ -117,18 +125,6 @@ impl ByteArray for RistrettoSecretKey {
         bytes_copied.zeroize();
 
         Ok(RistrettoSecretKey(scalar))
-    }
-
-    /// Return the byte array for the secret key in little-endian order
-    fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl Hash for RistrettoSecretKey {
-    /// Require the implementation of the Hash trait for Hashmaps
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_bytes().hash(state);
     }
 }
 
@@ -381,21 +377,33 @@ impl DomainSeparation for RistrettoGeneratorPoint {
 }
 
 impl PublicKey for RistrettoPublicKey {
-    type K = RistrettoSecretKey;
+    // type K = RistrettoSecretKey;
 
     const KEY_LEN: usize = 32;
+}
+
+impl BatchMul<RistrettoSecretKey> for RistrettoPublicKey {
+    fn batch_mul(scalars: &[RistrettoSecretKey], points: &[Self]) -> Self {
+        let p = points.iter().map(|p| &p.point);
+        let s = scalars.iter().map(|k| &k.0);
+        let p = RistrettoPoint::multiscalar_mul(s, p);
+        RistrettoPublicKey::new_from_pk(p)
+    }
+}
+
+impl BatchMul<RistrettoNonSecretScalar> for RistrettoPublicKey {
+    fn batch_mul(scalars: &[Self::K], points: &[Self]) -> Self {
+        todo!()
+    }
+}
+
+impl FromSecretKey for RistrettoPublicKey {
+    type K = RistrettoSecretKey;
 
     /// Generates a new Public key from the given secret key
     fn from_secret_key(k: &Self::K) -> RistrettoPublicKey {
         let pk = &k.0 * RISTRETTO_BASEPOINT_TABLE;
         RistrettoPublicKey::new_from_pk(pk)
-    }
-
-    fn batch_mul(scalars: &[Self::K], points: &[Self]) -> Self {
-        let p = points.iter().map(|p| &p.point);
-        let s = scalars.iter().map(|k| &k.0);
-        let p = RistrettoPoint::multiscalar_mul(s, p);
-        RistrettoPublicKey::new_from_pk(p)
     }
 }
 

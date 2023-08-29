@@ -166,37 +166,40 @@ impl<P: PublicKey> Eq for HomomorphicCommitment<P> {}
 pub trait HomomorphicCommitmentFactory {
     /// The type of public key that the underlying commitment will be based on
     type P: PublicKey;
+    type K: SecretKey;
 
     /// Create a new commitment with the blinding factor _k_ and value _v_ provided. The implementing type will provide
     /// the base values
-    fn commit(&self, k: &<Self::P as PublicKey>::K, v: &<Self::P as PublicKey>::K) -> HomomorphicCommitment<Self::P>;
+    fn commit(&self, k: &Self::K, v: &Self::K) -> HomomorphicCommitment<Self::P>;
+
     /// Return an identity point for addition using the specified base point. This is a commitment to zero with a zero
     /// blinding factor on the base point
     fn zero(&self) -> HomomorphicCommitment<Self::P>;
     /// Test whether the given blinding factor _k_ and value _v_ open the given commitment
     fn open(
         &self,
-        k: &<Self::P as PublicKey>::K,
-        v: &<Self::P as PublicKey>::K,
+        k: &Self::K,
+        v: &Self::K,
         commitment: &HomomorphicCommitment<Self::P>,
     ) -> bool;
     /// Create a commitment from a blinding factor _k_ and an integer value
-    fn commit_value(&self, k: &<Self::P as PublicKey>::K, value: u64) -> HomomorphicCommitment<Self::P>;
+    fn commit_value(&self, k: &Self::K, value: u64) -> HomomorphicCommitment<Self::P>;
     /// Test whether the given private key and value open the given commitment
-    fn open_value(&self, k: &<Self::P as PublicKey>::K, v: u64, commitment: &HomomorphicCommitment<Self::P>) -> bool;
+    fn open_value(&self, k: &Self::K, v: u64, commitment: &HomomorphicCommitment<Self::P>) -> bool;
 }
 
 /// A trait for creating extended commitments that are based on a public key
 pub trait ExtendedHomomorphicCommitmentFactory {
     /// The type of public key that the underlying commitment will be based on
     type P: PublicKey;
+    type K: SecretKey;
 
     /// Create a new commitment with the blinding factor vector **k** and value _v_ provided. The implementing type will
     /// provide the base values
     fn commit_extended(
         &self,
-        k_vec: &[<Self::P as PublicKey>::K],
-        v: &<Self::P as PublicKey>::K,
+        k_vec: &[Self::K],
+        v: &Self::K,
     ) -> Result<HomomorphicCommitment<Self::P>, CommitmentError>;
     /// Return an identity point for addition using the specified base points. This is a commitment to zero with a zero
     /// blinding factor vector on the base points
@@ -204,20 +207,20 @@ pub trait ExtendedHomomorphicCommitmentFactory {
     /// Test whether the given blinding factor vector **k** and value _v_ open the given commitment
     fn open_extended(
         &self,
-        k_vec: &[<Self::P as PublicKey>::K],
-        v: &<Self::P as PublicKey>::K,
+        k_vec: &[Self::K],
+        v: &Self::K,
         commitment: &HomomorphicCommitment<Self::P>,
     ) -> Result<bool, CommitmentError>;
     /// Create a commitment from a blinding factor vector **k** and an integer value
     fn commit_value_extended(
         &self,
-        k_vec: &[<Self::P as PublicKey>::K],
+        k_vec: &[Self::K],
         value: u64,
     ) -> Result<HomomorphicCommitment<Self::P>, CommitmentError>;
     /// Test whether the given private keys and value open the given commitment
     fn open_value_extended(
         &self,
-        k_vec: &[<Self::P as PublicKey>::K],
+        k_vec: &[Self::K],
         v: u64,
         commitment: &HomomorphicCommitment<Self::P>,
     ) -> Result<bool, CommitmentError>;

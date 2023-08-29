@@ -13,7 +13,7 @@ use core::ops::Mul;
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::keys::PublicKey;
+use crate::keys::{PublicKey, SecretKey};
 
 /// The result of a Diffie-Hellman key exchange
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -23,10 +23,12 @@ where P: Zeroize;
 impl<P> DiffieHellmanSharedSecret<P>
 where
     P: PublicKey + Zeroize,
-    for<'a> &'a <P as PublicKey>::K: Mul<&'a P, Output = P>,
+
 {
     /// Perform a Diffie-Hellman key exchange
-    pub fn new(sk: &P::K, pk: &P) -> Self {
+    pub fn new<'a, K>(sk: &K, pk: &P) -> Self
+       where &'a K: SecretKey + Mul<&'a P, Output = P>,
+    {
         Self(sk * pk)
     }
 

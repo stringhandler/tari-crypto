@@ -7,10 +7,15 @@
 //! implementation without worrying too much about the impact on upstream code.
 
 use core::ops::Add;
+use std::ops::Mul;
 
 use rand_core::{CryptoRng, RngCore};
 use tari_utilities::{ByteArray, ByteArrayError};
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+pub trait NonSecretScalar {
+    fn as_bytes(&self) -> &[u8];
+}
 
 /// A trait specifying common behaviour for representing `SecretKey`s. Specific elliptic curve
 /// implementations need to implement this trait for them to be used in Tari.
@@ -27,7 +32,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// let p = RistrettoPublicKey::from_secret_key(&k);
 /// ```
 pub trait SecretKey:
-    ByteArray + Clone + PartialEq + Eq + Add<Output = Self> + Default + Zeroize + ZeroizeOnDrop
+    Clone + PartialEq + Eq + Add<Output = Self> + Default + Zeroize + ZeroizeOnDrop
 {
     /// The length of the byte encoding of a key, in bytes
     const KEY_LEN: usize;
@@ -45,6 +50,9 @@ pub trait SecretKey:
 
     /// Generates a secret key by wide reduction; if the number of bytes is incorrect, this will fail
     fn from_bytes_wide(bytes: &[u8]) -> Result<Self, ByteArrayError>;
+
+    /// Reads a secret key from exact bytes; if the number of bytes is incorrect or encoding is wrong, this will fail
+    fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, ByteArrayError>;
 }
 
 //----------------------------------------   Public Keys  ----------------------------------------//
@@ -58,20 +66,29 @@ pub trait PublicKey: ByteArray + Add<Output = Self> + Clone + PartialOrd + Ord +
     const KEY_LEN: usize;
 
     /// The related [SecretKey](trait.SecretKey.html) type
-    type K: SecretKey;
+    // type K: SecretKey;
 
     /// Calculate the public key associated with the given secret key. This should not fail; if a
     /// failure does occur (implementation error?), the function will panic.
-    fn from_secret_key(k: &Self::K) -> Self;
+    // fn from_secret_key(k: &Self::K) -> Self;
 
     /// The length of the byte encoding of a key, in bytes
     fn key_length() -> usize {
         Self::KEY_LEN
     }
+}
+
+pub trait BatchMul<K> {
 
     /// Multiplies each of the items in `scalars` by their respective item in `points` and then adds
     /// the results to produce a single public key
     fn batch_mul(scalars: &[Self::K], points: &[Self]) -> Self;
+}
+
+pub trait FromSecretKey {
+    type K: SecretKey;
+
+    fn from_secret_key(k: &Self::K) -> Self;
 
     /// Generate a random public and secret key
     fn random_keypair<R: RngCore + CryptoRng>(rng: &mut R) -> (Self::K, Self) {
